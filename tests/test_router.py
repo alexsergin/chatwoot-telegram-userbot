@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from src.core.database import Database
@@ -68,6 +69,46 @@ async def test_handle_incoming_uses_existing_mapping(
 
     mock_chatwoot.find_or_create_contact.assert_not_awaited()
     mock_chatwoot.create_message.assert_awaited_once_with(20, "Hi again", None)
+
+
+async def test_handle_incoming_recreates_deleted_conversation(
+    router: MessageRouter, mock_chatwoot: AsyncMock, db: Database
+) -> None:
+    await db.save_mapping(telegram_chat_id=100, chatwoot_contact_id=5, chatwoot_conversation_id=20)
+    sender = _make_sender(100, "Bob")
+
+    err_response = MagicMock()
+    err_response.status_code = 404
+    mock_chatwoot.create_message.side_effect = [
+        httpx.HTTPStatusError("404 Not Found", request=MagicMock(), response=err_response),
+        None,
+    ]
+    mock_chatwoot.find_or_create_conversation.return_value = MagicMock(id=99)
+
+    await router.handle_incoming(sender, chat_id=100, text="Hi after delete")
+
+    mock_chatwoot.find_or_create_conversation.assert_awaited_once_with(5)
+    assert mock_chatwoot.create_message.await_count == 2
+    mock_chatwoot.create_message.assert_awaited_with(99, "Hi after delete", None)
+    assert await db.get_mapping(100) == (5, 99)
+
+
+async def test_handle_incoming_reraises_non_404_error(
+    router: MessageRouter, mock_chatwoot: AsyncMock, db: Database
+) -> None:
+    await db.save_mapping(telegram_chat_id=100, chatwoot_contact_id=5, chatwoot_conversation_id=20)
+    sender = _make_sender(100, "Bob")
+
+    err_response = MagicMock()
+    err_response.status_code = 500
+    mock_chatwoot.create_message.side_effect = httpx.HTTPStatusError(
+        "500 Internal Server Error", request=MagicMock(), response=err_response
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await router.handle_incoming(sender, chat_id=100, text="Hi")
+
+    mock_chatwoot.find_or_create_conversation.assert_not_awaited()
 
 
 async def test_handle_incoming_full_name(

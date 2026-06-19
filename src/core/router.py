@@ -2,6 +2,7 @@ import io
 import logging
 from urllib.parse import urlparse
 
+import httpx
 from telethon import TelegramClient
 from telethon.tl.functions.messages import SetTypingRequest
 from telethon.tl.types import SendMessageCancelAction, SendMessageTypingAction, User
@@ -41,17 +42,26 @@ class MessageRouter:
     ) -> None:
         mapping = await self._db.get_mapping(chat_id)
         if mapping:
-            _, conversation_id = mapping
+            contact_id, conversation_id = mapping
         else:
             name = " ".join(filter(None, [sender.first_name, sender.last_name])) or "Unknown"
             phone: str | None = getattr(sender, "phone", None)
             contact = await self._chatwoot.find_or_create_contact(sender.id, name, phone)
             conversation = await self._chatwoot.find_or_create_conversation(contact.id)
             await self._db.save_mapping(chat_id, contact.id, conversation.id)
+            contact_id = contact.id
             conversation_id = conversation.id
 
         chatwoot_att = (attachment.filename, attachment.data, attachment.mime_type) if attachment else None
-        await self._chatwoot.create_message(conversation_id, text, chatwoot_att)
+        try:
+            await self._chatwoot.create_message(conversation_id, text, chatwoot_att)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+            log.warning("conversation %s deleted in Chatwoot, creating a new one", conversation_id)
+            conversation = await self._chatwoot.find_or_create_conversation(contact_id)
+            await self._db.save_mapping(chat_id, contact_id, conversation.id)
+            await self._chatwoot.create_message(conversation.id, text, chatwoot_att)
 
     async def handle_outgoing(
         self,
