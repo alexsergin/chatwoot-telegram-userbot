@@ -26,7 +26,7 @@ def register_handlers(client: TelegramClient, router: MessageRouter) -> None:
     @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
     async def on_message(event: events.NewMessage.Event) -> None:
         sender = await event.get_sender()
-        if not isinstance(sender, User) or sender.bot:
+        if not isinstance(sender, User) or sender.bot or sender.id == 777000:
             return
 
         msg = event.message
@@ -46,7 +46,7 @@ def register_handlers(client: TelegramClient, router: MessageRouter) -> None:
         if not text and not attachment:
             return
 
-        await router.handle_incoming(sender, event.chat_id, text, attachment)
+        await router.handle_incoming(sender, event.chat_id, text, attachment, message_id=msg.id)
 
     @client.on(events.Raw(UpdateUserTyping))
     async def on_typing(event: UpdateUserTyping) -> None:

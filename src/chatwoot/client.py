@@ -47,11 +47,13 @@ class ChatwootClient:
 
         payload: dict[str, str | int] = {"name": name, "identifier": identifier}
         if phone:
-            payload["phone_number"] = phone
+            payload["phone_number"] = phone if phone.startswith("+") else f"+{phone}"
         resp = await self._http.post("contacts", json=payload)
         resp.raise_for_status()
         data = _unwrap(resp.json())
-        return Contact(id=data["id"], name=data["name"], identifier=identifier)
+        # Chatwoot may nest the contact under a "contact" key in the payload.
+        contact_data = data.get("contact", data)
+        return Contact(id=contact_data["id"], name=contact_data.get("name", ""), identifier=identifier)
 
     async def find_or_create_conversation(self, contact_id: int) -> Conversation:
         resp = await self._http.get(f"contacts/{contact_id}/conversations")

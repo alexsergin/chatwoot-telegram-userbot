@@ -10,6 +10,7 @@ from src.chatwoot.webhook import create_webhook_router
 from src.core.config import settings
 from src.core.database import Database
 from src.core.router import MessageRouter
+from src.telegram.catchup import catchup_missed_messages
 from src.telegram.client import build_client
 from src.telegram.handlers import register_handlers
 
@@ -53,10 +54,16 @@ async def main(auth_only: bool = False) -> None:
     )
     uv_server = uvicorn.Server(uv_config)
 
+    async def _catchup_after_server_ready() -> None:
+        while not uv_server.started:
+            await asyncio.sleep(0.05)
+        await catchup_missed_messages(tg, msg_router, db)
+
     try:
         await asyncio.gather(
             tg.run_until_disconnected(),
             uv_server.serve(),
+            _catchup_after_server_ready(),
         )
     finally:
         await tg.disconnect()

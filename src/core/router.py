@@ -39,6 +39,7 @@ class MessageRouter:
         chat_id: int,
         text: str,
         attachment: MediaAttachment | None = None,
+        message_id: int = 0,
     ) -> None:
         mapping = await self._db.get_mapping(chat_id)
         if mapping:
@@ -62,6 +63,9 @@ class MessageRouter:
             conversation = await self._chatwoot.find_or_create_conversation(contact_id)
             await self._db.save_mapping(chat_id, contact_id, conversation.id)
             await self._chatwoot.create_message(conversation.id, text, chatwoot_att)
+
+        if message_id:
+            await self._db.update_dialog_last_seen(chat_id, message_id)
 
     async def handle_outgoing(
         self,

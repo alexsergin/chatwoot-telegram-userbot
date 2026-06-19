@@ -23,3 +23,24 @@ async def test_save_mapping_upsert(db: Database) -> None:
     await db.save_mapping(100, 1, 2)
     await db.save_mapping(100, 3, 4)
     assert await db.get_mapping(100) == (3, 4)
+
+
+async def test_get_dialog_last_seen_returns_zero_when_missing(db: Database) -> None:
+    assert await db.get_dialog_last_seen(12345) == 0
+
+
+async def test_update_and_get_dialog_last_seen(db: Database) -> None:
+    await db.update_dialog_last_seen(100, 42)
+    assert await db.get_dialog_last_seen(100) == 42
+
+
+async def test_update_dialog_last_seen_keeps_max(db: Database) -> None:
+    await db.update_dialog_last_seen(100, 50)
+    await db.update_dialog_last_seen(100, 30)  # older — should be ignored
+    assert await db.get_dialog_last_seen(100) == 50
+
+
+async def test_update_dialog_last_seen_advances(db: Database) -> None:
+    await db.update_dialog_last_seen(100, 50)
+    await db.update_dialog_last_seen(100, 75)  # newer — should advance
+    assert await db.get_dialog_last_seen(100) == 75

@@ -1,10 +1,17 @@
 import aiosqlite
 
-_CREATE_TABLE = """
+_CREATE_MAPPINGS = """
 CREATE TABLE IF NOT EXISTS mappings (
     telegram_chat_id          INTEGER PRIMARY KEY,
     chatwoot_contact_id       INTEGER NOT NULL,
     chatwoot_conversation_id  INTEGER NOT NULL
+)
+"""
+
+_CREATE_DIALOG_STATE = """
+CREATE TABLE IF NOT EXISTS dialog_state (
+    telegram_chat_id     INTEGER PRIMARY KEY,
+    last_seen_message_id INTEGER NOT NULL
 )
 """
 
@@ -16,7 +23,8 @@ class Database:
 
     async def connect(self) -> None:
         self._conn = await aiosqlite.connect(self._path)
-        await self._conn.execute(_CREATE_TABLE)
+        await self._conn.execute(_CREATE_MAPPINGS)
+        await self._conn.execute(_CREATE_DIALOG_STATE)
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -63,3 +71,22 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
+
+    async def get_dialog_last_seen(self, telegram_chat_id: int) -> int:
+        async with self.conn.execute(
+            "SELECT last_seen_message_id FROM dialog_state WHERE telegram_chat_id = ?",
+            (telegram_chat_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def update_dialog_last_seen(self, telegram_chat_id: int, message_id: int) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO dialog_state (telegram_chat_id, last_seen_message_id) VALUES (?, ?)
+            ON CONFLICT(telegram_chat_id) DO UPDATE SET
+                last_seen_message_id = MAX(excluded.last_seen_message_id, last_seen_message_id)
+            """,
+            (telegram_chat_id, message_id),
+        )
+        await self.conn.commit()
