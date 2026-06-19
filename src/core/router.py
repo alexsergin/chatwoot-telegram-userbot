@@ -59,8 +59,19 @@ class MessageRouter:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 404:
                 raise
-            log.warning("conversation %s deleted in Chatwoot, creating a new one", conversation_id)
-            conversation = await self._chatwoot.find_or_create_conversation(contact_id)
+            log.info("conversation %s gone in Chatwoot, recreating", conversation_id)
+            try:
+                conversation = await self._chatwoot.find_or_create_conversation(contact_id)
+            except httpx.HTTPStatusError as inner:
+                if inner.response.status_code != 404:
+                    raise
+                log.info("contact %s also gone in Chatwoot, recreating contact and conversation", contact_id)
+                name = " ".join(filter(None, [sender.first_name, sender.last_name])) or "Unknown"
+                contact = await self._chatwoot.find_or_create_contact(
+                    sender.id, name, getattr(sender, "phone", None)
+                )
+                conversation = await self._chatwoot.find_or_create_conversation(contact.id)
+                contact_id = contact.id
             await self._db.save_mapping(chat_id, contact_id, conversation.id)
             await self._chatwoot.create_message(conversation.id, text, chatwoot_att)
 

@@ -45,6 +45,43 @@ async def test_find_or_create_contact_finds_existing(client: ChatwootClient) -> 
 
 
 @respx.mock
+async def test_find_or_create_contact_retries_without_phone_on_phone_conflict(client: ChatwootClient) -> None:
+    respx.get(f"{API_PREFIX}/contacts/search").mock(
+        return_value=httpx.Response(200, json={"payload": []})
+    )
+    respx.post(f"{API_PREFIX}/contacts").mock(
+        side_effect=[
+            httpx.Response(422, json={"message": "Phone number has already been taken", "attributes": ["phone_number"]}),
+            httpx.Response(200, json={"payload": {"id": 42, "name": "Alice", "identifier": "111"}}),
+        ]
+    )
+
+    contact = await client.find_or_create_contact(111, "Alice", phone="+79001234567")
+    assert contact.id == 42
+    # last POST (retry) must not include phone_number
+    import json
+    retry_body = json.loads(respx.calls[-1].request.content)
+    assert "phone_number" not in retry_body
+
+
+@respx.mock
+async def test_find_or_create_contact_recovers_soft_deleted_via_filter(client: ChatwootClient) -> None:
+    respx.get(f"{API_PREFIX}/contacts/search").mock(
+        return_value=httpx.Response(200, json={"payload": []})
+    )
+    respx.post(f"{API_PREFIX}/contacts").mock(
+        return_value=httpx.Response(422, json={"message": "Identifier has already been taken", "attributes": ["identifier"]})
+    )
+    respx.post(f"{API_PREFIX}/contacts/filter").mock(
+        return_value=httpx.Response(200, json={"payload": [{"id": 55, "name": "Alice", "identifier": "111"}]})
+    )
+
+    contact = await client.find_or_create_contact(111, "Alice")
+    assert contact.id == 55
+    assert contact.identifier == "111"
+
+
+@respx.mock
 async def test_find_or_create_conversation_creates_new(client: ChatwootClient) -> None:
     respx.get(f"{API_PREFIX}/contacts/3/conversations").mock(
         return_value=httpx.Response(200, json={"payload": []})

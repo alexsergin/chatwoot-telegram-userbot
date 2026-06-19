@@ -93,6 +93,35 @@ async def test_handle_incoming_recreates_deleted_conversation(
     assert await db.get_mapping(100) == (5, 99)
 
 
+async def test_handle_incoming_recreates_deleted_contact_and_conversation(
+    router: MessageRouter, mock_chatwoot: AsyncMock, db: Database
+) -> None:
+    await db.save_mapping(telegram_chat_id=100, chatwoot_contact_id=5, chatwoot_conversation_id=20)
+    sender = _make_sender(100, "Bob")
+
+    conv_404 = MagicMock()
+    conv_404.status_code = 404
+    contact_404 = MagicMock()
+    contact_404.status_code = 404
+
+    mock_chatwoot.create_message.side_effect = [
+        httpx.HTTPStatusError("404", request=MagicMock(), response=conv_404),
+        None,
+    ]
+    mock_chatwoot.find_or_create_conversation.side_effect = [
+        httpx.HTTPStatusError("404", request=MagicMock(), response=contact_404),
+        MagicMock(id=77),
+    ]
+    mock_chatwoot.find_or_create_contact.return_value = MagicMock(id=9)
+
+    await router.handle_incoming(sender, chat_id=100, text="Hi after contact delete")
+
+    mock_chatwoot.find_or_create_contact.assert_awaited_once_with(100, "Bob", None)
+    assert mock_chatwoot.find_or_create_conversation.await_count == 2
+    mock_chatwoot.create_message.assert_awaited_with(77, "Hi after contact delete", None)
+    assert await db.get_mapping(100) == (9, 77)
+
+
 async def test_handle_incoming_reraises_non_404_error(
     router: MessageRouter, mock_chatwoot: AsyncMock, db: Database
 ) -> None:

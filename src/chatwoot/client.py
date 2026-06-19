@@ -1,6 +1,9 @@
+import logging
 from dataclasses import dataclass
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,6 +40,46 @@ class ChatwootClient:
     ) -> Contact:
         identifier = str(telegram_user_id)
 
+        found = await self._search_contact(identifier)
+        if found:
+            return found
+
+        create_payload: dict[str, str | int] = {"name": name, "identifier": identifier}
+        if phone:
+            create_payload["phone_number"] = phone if phone.startswith("+") else f"+{phone}"
+        resp = await self._http.post("contacts", json=create_payload)
+
+        if resp.status_code == 422:
+            body = resp.json()
+            attrs = body.get("attributes", [])
+
+            # Phone number uniqueness conflict — retry without it; identifier is the real key.
+            if "phone_number" in attrs and "phone_number" in create_payload:
+                log.info(
+                    "POST /contacts 422 on phone_number for identifier=%s, retrying without phone", identifier
+                )
+                del create_payload["phone_number"]
+                resp = await self._http.post("contacts", json=create_payload)
+                if resp.is_success:
+                    data = _unwrap(resp.json())
+                    contact_data = data.get("contact", data)
+                    return Contact(id=contact_data["id"], name=contact_data.get("name", ""), identifier=identifier)
+
+            # Identifier may still be reserved (soft-deleted contact).
+            # Try the filter endpoint which can locate soft-deleted records.
+            log.info("POST /contacts 422 for identifier=%s, trying filter fallback", identifier)
+            found = await self._filter_contact(identifier)
+            if found:
+                return found
+            log.error("POST /contacts 422 response body: %s", resp.text)
+            resp.raise_for_status()
+
+        resp.raise_for_status()
+        data = _unwrap(resp.json())
+        contact_data = data.get("contact", data)
+        return Contact(id=contact_data["id"], name=contact_data.get("name", ""), identifier=identifier)
+
+    async def _search_contact(self, identifier: str) -> Contact | None:
         resp = await self._http.get("contacts/search", params={"q": identifier, "include_contacts": True})
         resp.raise_for_status()
         payload = resp.json().get("payload", [])
@@ -44,16 +87,20 @@ class ChatwootClient:
         for c in contacts:
             if c.get("identifier") == identifier:
                 return Contact(id=c["id"], name=c["name"], identifier=identifier)
+        return None
 
-        payload: dict[str, str | int] = {"name": name, "identifier": identifier}
-        if phone:
-            payload["phone_number"] = phone if phone.startswith("+") else f"+{phone}"
-        resp = await self._http.post("contacts", json=payload)
-        resp.raise_for_status()
-        data = _unwrap(resp.json())
-        # Chatwoot may nest the contact under a "contact" key in the payload.
-        contact_data = data.get("contact", data)
-        return Contact(id=contact_data["id"], name=contact_data.get("name", ""), identifier=identifier)
+    async def _filter_contact(self, identifier: str) -> Contact | None:
+        resp = await self._http.post(
+            "contacts/filter",
+            json={"payload": [{"attribute_key": "identifier", "filter_operator": "equal_to",
+                               "values": [identifier], "query_operator": None}]},
+        )
+        if not resp.is_success:
+            return None
+        for c in resp.json().get("payload", []):
+            if c.get("identifier") == identifier:
+                return Contact(id=c["id"], name=c["name"], identifier=identifier)
+        return None
 
     async def find_or_create_conversation(self, contact_id: int) -> Conversation:
         resp = await self._http.get(f"contacts/{contact_id}/conversations")
