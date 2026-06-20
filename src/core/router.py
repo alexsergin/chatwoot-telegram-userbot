@@ -141,9 +141,5 @@ class MessageRouter:
         _, conversation_id = mapping
         try:
             await self._chatwoot.set_contact_typing(conversation_id, is_typing)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                log.info("conversation %s gone, clearing stale mapping for user %s", conversation_id, user_id)
-                await self._db.delete_mapping(user_id)
-            else:
-                log.warning("typing status failed for conversation %s: %s", conversation_id, exc.response.status_code)
+        except httpx.HTTPStatusError:
+            pass

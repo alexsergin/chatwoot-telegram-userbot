@@ -234,7 +234,7 @@ async def test_handle_telegram_typing_ignores_unknown(
     mock_chatwoot.set_contact_typing.assert_not_awaited()
 
 
-async def test_handle_telegram_typing_clears_stale_mapping_on_404(
+async def test_handle_telegram_typing_ignores_http_errors(
     router: MessageRouter, mock_chatwoot: AsyncMock, db: Database
 ) -> None:
     await db.save_mapping(telegram_chat_id=100, chatwoot_contact_id=1, chatwoot_conversation_id=10)
@@ -247,4 +247,4 @@ async def test_handle_telegram_typing_clears_stale_mapping_on_404(
 
     await router.handle_telegram_typing(100, True)
 
-    assert await db.get_mapping(100) is None
+    assert await db.get_mapping(100) == (1, 10)
