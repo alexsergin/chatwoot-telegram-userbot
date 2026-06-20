@@ -1,9 +1,11 @@
 import argparse
 import asyncio
+import copy
 import os
 
 import uvicorn
 from fastapi import FastAPI
+from uvicorn.config import LOGGING_CONFIG
 
 from src.chatwoot.client import ChatwootClient
 from src.chatwoot.webhook import create_webhook_router
@@ -49,8 +51,13 @@ async def main(auth_only: bool = False) -> None:
     app = FastAPI()
     app.include_router(create_webhook_router(msg_router))
 
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    log_config["root"] = {"handlers": ["default"], "level": "INFO"}
+    log_config["loggers"]["httpx"] = {"level": "WARNING", "propagate": True}
+
     uv_config = uvicorn.Config(
-        app, host=settings.webhook_host, port=settings.webhook_port, log_level="info"
+        app, host=settings.webhook_host, port=settings.webhook_port, log_level="info",
+        log_config=log_config,
     )
     uv_server = uvicorn.Server(uv_config)
 

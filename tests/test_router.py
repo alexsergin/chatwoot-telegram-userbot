@@ -27,12 +27,15 @@ def router(db: Database, mock_chatwoot: AsyncMock, mock_tg: AsyncMock) -> Messag
     return MessageRouter(db=db, chatwoot=mock_chatwoot, tg=mock_tg)
 
 
-def _make_sender(user_id: int, first_name: str, last_name: str | None = None) -> MagicMock:
+def _make_sender(
+    user_id: int, first_name: str, last_name: str | None = None, username: str | None = None
+) -> MagicMock:
     sender = MagicMock()
     sender.id = user_id
     sender.first_name = first_name
     sender.last_name = last_name
     sender.phone = None
+    sender.username = username
     return sender
 
 
@@ -42,7 +45,7 @@ async def test_handle_incoming_creates_mapping(
     sender = _make_sender(999, "Alice")
     await router.handle_incoming(sender, chat_id=999, text="Hello")
 
-    mock_chatwoot.find_or_create_contact.assert_awaited_once_with(999, "Alice", None)
+    mock_chatwoot.find_or_create_contact.assert_awaited_once_with(999, "Alice", None, None)
     mock_chatwoot.find_or_create_conversation.assert_awaited_once_with(1)
     mock_chatwoot.create_message.assert_awaited_once_with(10, "Hello", None)
     assert await db.get_mapping(999) == (1, 10)
@@ -116,7 +119,7 @@ async def test_handle_incoming_recreates_deleted_contact_and_conversation(
 
     await router.handle_incoming(sender, chat_id=100, text="Hi after contact delete")
 
-    mock_chatwoot.find_or_create_contact.assert_awaited_once_with(100, "Bob", None)
+    mock_chatwoot.find_or_create_contact.assert_awaited_once_with(100, "Bob", None, None)
     assert mock_chatwoot.find_or_create_conversation.await_count == 2
     mock_chatwoot.create_message.assert_awaited_with(77, "Hi after contact delete", None)
     assert await db.get_mapping(100) == (9, 77)
@@ -145,7 +148,7 @@ async def test_handle_incoming_full_name(
 ) -> None:
     sender = _make_sender(111, "John", "Doe")
     await router.handle_incoming(sender, chat_id=111, text="Hey")
-    mock_chatwoot.find_or_create_contact.assert_awaited_once_with(111, "John Doe", None)
+    mock_chatwoot.find_or_create_contact.assert_awaited_once_with(111, "John Doe", None, None)
 
 
 async def test_handle_outgoing_sends_message(
@@ -229,3 +232,19 @@ async def test_handle_telegram_typing_ignores_unknown(
 ) -> None:
     await router.handle_telegram_typing(999, True)
     mock_chatwoot.set_contact_typing.assert_not_awaited()
+
+
+async def test_handle_telegram_typing_clears_stale_mapping_on_404(
+    router: MessageRouter, mock_chatwoot: AsyncMock, db: Database
+) -> None:
+    await db.save_mapping(telegram_chat_id=100, chatwoot_contact_id=1, chatwoot_conversation_id=10)
+
+    err_resp = MagicMock()
+    err_resp.status_code = 404
+    mock_chatwoot.set_contact_typing.side_effect = httpx.HTTPStatusError(
+        "404", request=MagicMock(), response=err_resp
+    )
+
+    await router.handle_telegram_typing(100, True)
+
+    assert await db.get_mapping(100) is None

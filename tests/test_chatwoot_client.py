@@ -31,6 +31,23 @@ async def test_find_or_create_contact_creates_new(client: ChatwootClient) -> Non
 
 
 @respx.mock
+async def test_find_or_create_contact_sends_username_and_phone(client: ChatwootClient) -> None:
+    respx.get(f"{API_PREFIX}/contacts/search").mock(
+        return_value=httpx.Response(200, json={"payload": []})
+    )
+    create_route = respx.post(f"{API_PREFIX}/contacts").mock(
+        return_value=httpx.Response(200, json={"payload": {"id": 42, "name": "Alice", "identifier": "111"}})
+    )
+
+    await client.find_or_create_contact(111, "Alice", phone="+79001234567", username="alice_tg")
+
+    import json
+    body = json.loads(create_route.calls[0].request.content)
+    assert body["phone_number"] == "+79001234567"
+    assert body["additional_attributes"]["social_profiles"]["telegram"] == "alice_tg"
+
+
+@respx.mock
 async def test_find_or_create_contact_finds_existing(client: ChatwootClient) -> None:
     respx.get(f"{API_PREFIX}/contacts/search").mock(
         return_value=httpx.Response(
@@ -38,10 +55,47 @@ async def test_find_or_create_contact_finds_existing(client: ChatwootClient) -> 
             json={"payload": [{"id": 7, "name": "Bob", "identifier": "222"}]},
         )
     )
+    respx.patch(f"{API_PREFIX}/contacts/7").mock(return_value=httpx.Response(200, json={}))
 
     contact = await client.find_or_create_contact(222, "Bob")
     assert contact.id == 7
     assert contact.name == "Bob"
+
+
+@respx.mock
+async def test_find_or_create_contact_patches_existing_with_phone_and_username(client: ChatwootClient) -> None:
+    respx.get(f"{API_PREFIX}/contacts/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={"payload": [{"id": 7, "name": "Bob", "identifier": "222"}]},
+        )
+    )
+    patch_route = respx.patch(f"{API_PREFIX}/contacts/7").mock(return_value=httpx.Response(200, json={}))
+
+    await client.find_or_create_contact(222, "Bob", phone="+79001234567", username="bob_tg")
+
+    import json
+    patch_body = json.loads(patch_route.calls[0].request.content)
+    assert patch_body["phone_number"] == "+79001234567"
+    assert patch_body["additional_attributes"]["social_profiles"]["telegram"] == "bob_tg"
+
+
+@respx.mock
+async def test_find_or_create_contact_patches_after_phone_422_retry(client: ChatwootClient) -> None:
+    respx.get(f"{API_PREFIX}/contacts/search").mock(return_value=httpx.Response(200, json={"payload": []}))
+    respx.post(f"{API_PREFIX}/contacts").mock(
+        side_effect=[
+            httpx.Response(422, json={"message": "Phone number has already been taken", "attributes": ["phone_number"]}),
+            httpx.Response(200, json={"payload": {"id": 42, "name": "Alice", "identifier": "111"}}),
+        ]
+    )
+    patch_route = respx.patch(f"{API_PREFIX}/contacts/42").mock(return_value=httpx.Response(200, json={}))
+
+    await client.find_or_create_contact(111, "Alice", phone="+79001234567")
+
+    import json
+    patch_body = json.loads(patch_route.calls[0].request.content)
+    assert patch_body["phone_number"] == "+79001234567"
 
 
 @respx.mock
@@ -56,11 +110,14 @@ async def test_find_or_create_contact_retries_without_phone_on_phone_conflict(cl
         ]
     )
 
+    respx.patch(f"{API_PREFIX}/contacts/42").mock(return_value=httpx.Response(200, json={}))
+
     contact = await client.find_or_create_contact(111, "Alice", phone="+79001234567")
     assert contact.id == 42
-    # last POST (retry) must not include phone_number
+    # second POST (retry) must not include phone_number
     import json
-    retry_body = json.loads(respx.calls[-1].request.content)
+    post_calls = [c for c in respx.calls if c.request.method == "POST" and "/contacts" in str(c.request.url) and "/filter" not in str(c.request.url)]
+    retry_body = json.loads(post_calls[-1].request.content)
     assert "phone_number" not in retry_body
 
 

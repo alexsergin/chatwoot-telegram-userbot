@@ -47,7 +47,8 @@ class MessageRouter:
         else:
             name = " ".join(filter(None, [sender.first_name, sender.last_name])) or "Unknown"
             phone: str | None = getattr(sender, "phone", None)
-            contact = await self._chatwoot.find_or_create_contact(sender.id, name, phone)
+            username: str | None = getattr(sender, "username", None)
+            contact = await self._chatwoot.find_or_create_contact(sender.id, name, phone, username)
             conversation = await self._chatwoot.find_or_create_conversation(contact.id)
             await self._db.save_mapping(chat_id, contact.id, conversation.id)
             contact_id = contact.id
@@ -68,7 +69,7 @@ class MessageRouter:
                 log.info("contact %s also gone in Chatwoot, recreating contact and conversation", contact_id)
                 name = " ".join(filter(None, [sender.first_name, sender.last_name])) or "Unknown"
                 contact = await self._chatwoot.find_or_create_contact(
-                    sender.id, name, getattr(sender, "phone", None)
+                    sender.id, name, getattr(sender, "phone", None), getattr(sender, "username", None)
                 )
                 conversation = await self._chatwoot.find_or_create_conversation(contact.id)
                 contact_id = contact.id
@@ -138,4 +139,11 @@ class MessageRouter:
         if mapping is None:
             return
         _, conversation_id = mapping
-        await self._chatwoot.set_contact_typing(conversation_id, is_typing)
+        try:
+            await self._chatwoot.set_contact_typing(conversation_id, is_typing)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                log.info("conversation %s gone, clearing stale mapping for user %s", conversation_id, user_id)
+                await self._db.delete_mapping(user_id)
+            else:
+                log.warning("typing status failed for conversation %s: %s", conversation_id, exc.response.status_code)

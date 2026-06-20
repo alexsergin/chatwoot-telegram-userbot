@@ -64,6 +64,12 @@ class Database:
         )
         await self.conn.commit()
 
+    async def delete_mapping(self, telegram_chat_id: int) -> None:
+        await self.conn.execute(
+            "DELETE FROM mappings WHERE telegram_chat_id = ?", (telegram_chat_id,)
+        )
+        await self.conn.commit()
+
     async def get_telegram_chat_id(self, chatwoot_conversation_id: int) -> int | None:
         async with self.conn.execute(
             "SELECT telegram_chat_id FROM mappings WHERE chatwoot_conversation_id = ?",

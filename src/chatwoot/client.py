@@ -36,17 +36,20 @@ class ChatwootClient:
         await self._http.aclose()
 
     async def find_or_create_contact(
-        self, telegram_user_id: int, name: str, phone: str | None = None
+        self, telegram_user_id: int, name: str, phone: str | None = None, username: str | None = None
     ) -> Contact:
         identifier = str(telegram_user_id)
 
         found = await self._search_contact(identifier)
         if found:
+            await self._patch_contact(found.id, phone, username)
             return found
 
-        create_payload: dict[str, str | int] = {"name": name, "identifier": identifier}
+        create_payload: dict = {"name": name, "identifier": identifier}
         if phone:
             create_payload["phone_number"] = phone if phone.startswith("+") else f"+{phone}"
+        if username:
+            create_payload["additional_attributes"] = {"social_profiles": {"telegram": username}}
         resp = await self._http.post("contacts", json=create_payload)
 
         if resp.status_code == 422:
@@ -63,13 +66,17 @@ class ChatwootClient:
                 if resp.is_success:
                     data = _unwrap(resp.json())
                     contact_data = data.get("contact", data)
-                    return Contact(id=contact_data["id"], name=contact_data.get("name", ""), identifier=identifier)
+                    contact = Contact(id=contact_data["id"], name=contact_data.get("name", ""), identifier=identifier)
+                    # Best-effort: set the phone via PATCH now that the contact exists.
+                    await self._patch_contact(contact.id, phone, None)
+                    return contact
 
             # Identifier may still be reserved (soft-deleted contact).
             # Try the filter endpoint which can locate soft-deleted records.
             log.info("POST /contacts 422 for identifier=%s, trying filter fallback", identifier)
             found = await self._filter_contact(identifier)
             if found:
+                await self._patch_contact(found.id, phone, username)
                 return found
             log.error("POST /contacts 422 response body: %s", resp.text)
             resp.raise_for_status()
@@ -101,6 +108,18 @@ class ChatwootClient:
             if c.get("identifier") == identifier:
                 return Contact(id=c["id"], name=c["name"], identifier=identifier)
         return None
+
+    async def _patch_contact(self, contact_id: int, phone: str | None, username: str | None) -> None:
+        patch: dict = {}
+        if phone:
+            patch["phone_number"] = phone if phone.startswith("+") else f"+{phone}"
+        if username:
+            patch["additional_attributes"] = {"social_profiles": {"telegram": username}}
+        if not patch:
+            return
+        resp = await self._http.patch(f"contacts/{contact_id}", json=patch)
+        if not resp.is_success:
+            log.warning("PATCH /contacts/%s failed: %s %s", contact_id, resp.status_code, resp.text)
 
     async def find_or_create_conversation(self, contact_id: int) -> Conversation:
         resp = await self._http.get(f"contacts/{contact_id}/conversations")
@@ -144,7 +163,8 @@ class ChatwootClient:
             return resp.content
 
     async def set_contact_typing(self, conversation_id: int, is_typing: bool) -> None:
-        await self._http.post(
+        resp = await self._http.post(
             f"conversations/{conversation_id}/typing_status",
             json={"typing_status": "on" if is_typing else "off"},
         )
+        resp.raise_for_status()
